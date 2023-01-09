@@ -1,0 +1,44 @@
+version: '3.8'
+services:
+  caching:
+    image: redis:latest
+    restart: always
+    ports:
+      - '6379:6379'
+    healthcheck:
+      retries: 20
+      interval: 5s
+      test: >
+        redis-cli -h "$$(hostname)" -a admin ping
+    command: ["redis-server", "--save", "20", "1", "--loglevel", "warning", "--requirepass", "eYVX7EwVmmxKPCDmwMtyKVge8oLd2t81"]
+    volumes:
+      - cache:/data
+  db:
+    image: postgres:9.6
+    restart: always
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+    ports:
+      - '5432:5432'
+    volumes:
+      - db:/var/lib/postgresql/data
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    container_name: 'rabbitmq'
+    ports:
+      - 5672:5672
+      - 15672:15672
+    volumes:
+      - ~/.docker-conf/rabbitmq/data/:/var/lib/rabbitmq/
+      - ~/.docker-conf/rabbitmq/log/:/var/log/rabbitmq
+    networks:
+      - rabbitmq_go_net
+volumes:
+  cache:
+    driver: local
+  db:
+    driver: local
+networks:
+  rabbitmq_go_net:
+    driver: bridge
