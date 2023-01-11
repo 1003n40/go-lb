@@ -94,19 +94,28 @@ func (s *Instance) Execute(ctx context.Context) error {
 	}
 
 	/*
-			Initialize round-robin algorithm, which is going to be our primary host picker.
-		We need to have at least 1 host available, before trying to balance, or else we should return error.
-		That being said, before starting instance, we should guarantee that we have some nodes available.
-	*/
-	// Initialize round-robin
+	*Initialize round-robin algorithm, which is going to be our primary host picker.
+	*We need to have at least 1 host available, before trying to balance, or else we should return error.
+	*That being said, before starting instance, we should guarantee that we have some nodes available.
+	 */
+
+	/*
+	 * Initializes round-robin load balancing algorithm with empty list. It will be used to append hosts in parallel
+	 * that way we are going to be able to load-balance incoming new hosts from the events.
+	 */
 	rr = algorithm.NewRoundRobinParallel(make([]string, 0)...)
 
-	// We want to monitor all the servers we get (passive check), this check will make changes to available
-	// hosts in round-robin setup, by adding removing them. For the rest of the handling implementation will
-	// reside on even driven design, by registering, removing or updating nodes via event handlers. We want
-	// this handler to be async in order to start processing events ASAP and not loose node that was registered
-	// because of a ping wait to specific host.
-	s.healthMonitor()
+	/*
+	* We want to monitor all the servers we get (passive check), this check will make changes to available
+	* hosts in round-robin setup, by either adding or removing them. For the rest of the handling implementation will
+	* reside on even driven design, by registering, removing or updating nodes via event handlers. We want
+	* this handler to be async in order to start processing events ASAP and not loose node that was registered
+	* because of a ping wait to specific host.
+	* In later implementation  we can consider if it is better just to leave the backendManager to manage only creations
+	* in round-robin algorithm structure, that way we can reduce chance of possible deadlocks and deadlocking only for
+	* that resouse, even though the structure, provides try lock mechanism, which is not really reliable.
+	 */
+	s.backendManager()
 
 	/*
 		Initialize RabbitMQ connection for retrieving messages on CRUD operations from the service
@@ -140,9 +149,6 @@ func (s *Instance) Execute(ctx context.Context) error {
 
 	// We want to handle messages async, as we should do also the processing
 	s.handleEvents(msgs)
-
-	//// We want to monitor all the servers we get (passive check)
-	//s.healthMonitor()
 
 	// Handle server requests (in parallel)
 	err = s.handleLBRequests(instanceConf)
@@ -189,6 +195,7 @@ func (s *Instance) handleRRRequest(sticky bool, redispool *redis.Pool) error {
 				return
 			}
 			url, _ := url.Parse(host)
+
 			// Choose the next backend server to send the request to
 			schema := url.Scheme
 			if schema == "" {
@@ -200,7 +207,11 @@ func (s *Instance) handleRRRequest(sticky bool, redispool *redis.Pool) error {
 	}
 
 	// Start the server
-	log.Fatal(http.ListenAndServe(fmt.Sprintf(":%d", s.servicePort), proxy))
+	err := http.ListenAndServe(fmt.Sprintf(":%d", s.servicePort), proxy)
+	if err != nil {
+		s.logger.Error(err, "Error while trying to listen and serve")
+		return err
+	}
 	return nil
 }
 
@@ -325,7 +336,7 @@ func (s *Instance) handleEvents(msgs <-chan amqp091.Delivery) {
 	}()
 }
 
-func (s *Instance) healthMonitor() {
+func (s *Instance) backendManager() {
 	wg.Add(1)
 	go func() {
 		t := time.NewTicker(time.Duration(s.passiveCheckInterval) * time.Second)
